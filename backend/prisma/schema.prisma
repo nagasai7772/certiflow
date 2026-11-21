@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserRole {
+  TRAINING_CENTRE
+  DISTRICT_OFFICER
+  QUALITY_OFFICER
+  STATE_OFFICER
+}
+
+enum BatchStatus {
+  DRAFT
+  SUBMITTED
+  DISTRICT_REVIEW
+  QUALITY_REVIEW
+  STATE_REVIEW
+  RETURNED
+  REJECTED
+  APPROVED
+}
+
+enum ApprovalStage {
+  DISTRICT
+  QUALITY
+  STATE
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  RETURNED
+}
+
+enum CertificateStatus {
+  ISSUED
+  CANCELLED
+}
+
+enum NotificationChannel {
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  QUEUED
+  PROCESSING
+  DELIVERED
+  RETRYING
+  FAILED
+}
+
+enum NotificationAttemptStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+// ==========================================
+// USER
+// ==========================================
+
+model User {
+  id       String   @id @default(uuid()) @db.Uuid
+  name     String
+  email    String   @unique
+  password String
+  role     UserRole
+  isActive Boolean  @default(true)
+  district String?
+
+  trainingCentreId String?         @db.Uuid
+  trainingCentre   TrainingCentre? @relation(fields: [trainingCentreId], references: [id])
+
+  createdBatches Batch[] @relation("BatchCreator")
+
+  approvals Approval[]
+  auditLogs AuditLog[]
+
+  cancelledCertificates Certificate[] @relation("CertificateCanceller")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([district])
+}
+
+// ==========================================
+// TRAINING CENTRE
+// ==========================================
+
+model TrainingCentre {
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String
+  code     String  @unique
+  district String
+  address  String?
+
+  users   User[]
+  batches Batch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ==========================================
+// BATCH
+// ==========================================
+
+model Batch {
+  id        String      @id @default(uuid()) @db.Uuid
+  batchCode String
+  name      String
+  status    BatchStatus @default(DRAFT)
+
+  currentSubmissionVersion Int     @default(1)
+  returnReason             String?
+
+  trainingCentreId String         @db.Uuid
+  trainingCentre   TrainingCentre @relation(fields: [trainingCentreId], references: [id])
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("BatchCreator", fields: [createdById], references: [id])
+
+  candidates   Candidate[]
+  approvals    Approval[]
+  auditLogs    AuditLog[]
+  certificates Certificate[]
+
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([trainingCentreId, batchCode])
+  @@index([status])
+  @@index([trainingCentreId, status])
+}
+
+// ==========================================
+// CANDIDATE
+// ==========================================
+
+model Candidate {
+  id                 String  @id @default(uuid()) @db.Uuid
+  registrationNumber String
+  fullName           String
+  email              String?
+  phone              String
+
+  batchId String @db.Uuid
+  batch   Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  certificate Certificate?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([batchId, registrationNumber])
+  @@index([batchId])
+}
+
+// ==========================================
+// APPROVAL
+// ==========================================
+
+model Approval {
+  id String @id @default(uuid()) @db.Uuid
+
+  batchId String @db.Uuid
+  batch   Batch  @relation(fields: [batchId], references: [id])
+
+  officerId String @db.Uuid
+  officer   User   @relation(fields: [officerId], references: [id])
+
+  stage    ApprovalStage
+  decision ApprovalDecision
+
+  submissionVersion Int
+
+  comment   String?
+  decidedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@unique([batchId, submissionVersion, stage, officerId])
+  @@index([batchId, submissionVersion, stage])
+  @@index([officerId, decidedAt])
+}
+
+// ==========================================
+// AUDIT LOG
+// ==========================================
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  batchId String? @db.Uuid
+  batch   Batch?  @relation(fields: [batchId], references: [id])
+
+  actorId String? @db.Uuid
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     String
+  entityType String
+  entityId   String
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([batchId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// ==========================================
+// CERTIFICATE
+// ==========================================
+
+model Certificate {
+  id String @id @default(uuid()) @db.Uuid
+
+  certificateNumber     String @unique
+  verificationTokenHash String @unique
+
+  status CertificateStatus @default(ISSUED)
+
+  candidateId String    @unique @db.Uuid
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+
+  batchId String @db.Uuid
+  batch   Batch  @relation(fields: [batchId], references: [id])
+
+  fileKey String?
+
+  issuedAt DateTime @default(now())
+
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  cancelledById String? @db.Uuid
+  cancelledBy   User?   @relation("CertificateCanceller", fields: [cancelledById], references: [id])
+
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([batchId])
+  @@index([status])
+}
+
+// ==========================================
+// NOTIFICATION
+// ==========================================
+
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+
+  certificateId String      @db.Uuid
+  certificate   Certificate @relation(fields: [certificateId], references: [id])
+
+  channel NotificationChannel @default(WHATSAPP)
+  status  NotificationStatus  @default(QUEUED)
+
+  recipientPhone String
+
+  idempotencyKey String @unique
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  nextRetryAt DateTime?
+  deliveredAt DateTime?
+  lastError   String?
+
+  attemptLogs NotificationAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([certificateId, channel])
+  @@index([status, nextRetryAt])
+}
+
+// ==========================================
+// NOTIFICATION ATTEMPT
+// ==========================================
+
+model NotificationAttempt {
+  id String @id @default(uuid()) @db.Uuid
+
+  notificationId String       @db.Uuid
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  attemptNumber Int
+  status        NotificationAttemptStatus
+
+  providerMessageId String?
+  errorMessage      String?
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@unique([notificationId, attemptNumber])
+  @@index([notificationId, startedAt])
+}
